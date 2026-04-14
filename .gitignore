@@ -67,3 +67,19 @@ packages/*/LICENSE
 # Notebooks outputs
 packages/graphrag-*/example_notebooks/**/output
 packages/graphrag-*/example_notebooks/**/cache
+
+# ViTextVQA local data / generated artifacts
+ViTextVQA_images/
+dev/
+vitextvqa_demo/
+vitextvqa_demo_one/
+vitextvqa_ocr_dev/
+vitextvqa_ocr_pick/
+test/OCR_img/
+test/test_bboxes/
+test/graphs/
+test/semantic_graphs/
+test/graphrag_baseline/
+test/graphrag_baseline_per_image/
+test/*.jsonl
+test/*.zip
