@@ -69,6 +69,16 @@ def create_tokenizer(tokenizer_config: "TokenizerConfig") -> Tokenizer:
                     LiteLLMTokenizer,
                     scope="singleton",
                 )
+            case TokenizerType.LocalHF:
+                from graphrag_llm.tokenizer.local_hf_tokenizer import (
+                    LocalHFTokenizer,
+                )
+
+                register_tokenizer(
+                    TokenizerType.LocalHF,
+                    LocalHFTokenizer,
+                    scope="singleton",
+                )
             case TokenizerType.Tiktoken:
                 from graphrag_llm.tokenizer.tiktoken_tokenizer import (
                     TiktokenTokenizer,

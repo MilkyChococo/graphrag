@@ -1,0 +1,17 @@
+# GraphRAG workspace packages from this repo
+-e ./packages/graphrag-cache
+-e ./packages/graphrag-chunking
+-e ./packages/graphrag-common
+-e ./packages/graphrag-input
+-e ./packages/graphrag-storage
+-e ./packages/graphrag-vectors
+-e ./packages/graphrag-llm
+-e ./packages/graphrag
+
+# Local Qwen2.5-VL fallback for hybrid inference
+torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+transformers
+accelerate
+
+# Runtime helpers used by the test / hybrid scripts
+tqdm

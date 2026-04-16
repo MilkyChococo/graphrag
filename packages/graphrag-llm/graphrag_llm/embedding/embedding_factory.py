@@ -10,7 +10,7 @@ from graphrag_common.factory import Factory
 
 from graphrag_llm.cache import create_cache_key
 from graphrag_llm.config.tokenizer_config import TokenizerConfig
-from graphrag_llm.config.types import LLMProviderType
+from graphrag_llm.config.types import LLMProviderType, TokenizerType
 from graphrag_llm.metrics.noop_metrics_store import NoopMetricsStore
 from graphrag_llm.tokenizer.tokenizer_factory import create_tokenizer
 
@@ -94,6 +94,16 @@ def create_embedding(
                     embedding_initializer=LiteLLMEmbedding,
                     scope="singleton",
                 )
+            case LLMProviderType.LocalHF:
+                from graphrag_llm.embedding.local_hf_embedding import (
+                    LocalHFEmbedding,
+                )
+
+                register_embedding(
+                    embedding_type=LLMProviderType.LocalHF,
+                    embedding_initializer=LocalHFEmbedding,
+                    scope="singleton",
+                )
             case LLMProviderType.MockLLM:
                 from graphrag_llm.embedding.mock_llm_embedding import MockLLMEmbedding
 
@@ -105,7 +115,14 @@ def create_embedding(
                 msg = f"ModelConfig.type '{strategy}' is not registered in the CompletionFactory. Registered strategies: {', '.join(embedding_factory.keys())}"
                 raise ValueError(msg)
 
-    tokenizer = tokenizer or create_tokenizer(TokenizerConfig(model_id=model_id))
+    tokenizer = tokenizer or create_tokenizer(
+        TokenizerConfig(
+            type=TokenizerType.LocalHF
+            if strategy == LLMProviderType.LocalHF
+            else TokenizerType.LiteLLM,
+            model_id=model_config.model if strategy == LLMProviderType.LocalHF else model_id,
+        )
+    )
 
     rate_limiter: RateLimiter | None = None
     if model_config.rate_limit:

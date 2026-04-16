@@ -11,6 +11,7 @@ class LLMProviderType(StrEnum):
     """Enum for LLM provider types."""
 
     LiteLLM = "litellm"
+    LocalHF = "local_hf"
     MockLLM = "mock"
 
 
@@ -69,4 +70,5 @@ class TokenizerType(StrEnum):
     """Enum for tokenizer types."""
 
     LiteLLM = "litellm"
+    LocalHF = "local_hf"
     Tiktoken = "tiktoken"

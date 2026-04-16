@@ -10,7 +10,7 @@ from graphrag_common.factory import Factory
 
 from graphrag_llm.cache import create_cache_key
 from graphrag_llm.config.tokenizer_config import TokenizerConfig
-from graphrag_llm.config.types import LLMProviderType
+from graphrag_llm.config.types import LLMProviderType, TokenizerType
 from graphrag_llm.metrics.noop_metrics_store import NoopMetricsStore
 from graphrag_llm.tokenizer.tokenizer_factory import create_tokenizer
 
@@ -95,6 +95,16 @@ def create_completion(
                     completion_initializer=LiteLLMCompletion,
                     scope="singleton",
                 )
+            case LLMProviderType.LocalHF:
+                from graphrag_llm.completion.local_hf_completion import (
+                    LocalHFCompletion,
+                )
+
+                register_completion(
+                    completion_type=LLMProviderType.LocalHF,
+                    completion_initializer=LocalHFCompletion,
+                    scope="singleton",
+                )
             case LLMProviderType.MockLLM:
                 from graphrag_llm.completion.mock_llm_completion import (
                     MockLLMCompletion,
@@ -108,7 +118,14 @@ def create_completion(
                 msg = f"ModelConfig.type '{strategy}' is not registered in the CompletionFactory. Registered strategies: {', '.join(completion_factory.keys())}"
                 raise ValueError(msg)
 
-    tokenizer = tokenizer or create_tokenizer(TokenizerConfig(model_id=model_id))
+    tokenizer = tokenizer or create_tokenizer(
+        TokenizerConfig(
+            type=TokenizerType.LocalHF
+            if strategy == LLMProviderType.LocalHF
+            else TokenizerType.LiteLLM,
+            model_id=model_config.model if strategy == LLMProviderType.LocalHF else model_id,
+        )
+    )
 
     rate_limiter: RateLimiter | None = None
     if model_config.rate_limit:

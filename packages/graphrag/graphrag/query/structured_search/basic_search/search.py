@@ -1,7 +1,4 @@
-# Copyright (c) 2024 Microsoft Corporation.
-# Licensed under the MIT License
-
-"""BasicSearch implementation."""
+from __future__ import annotations
 
 import logging
 import time
@@ -24,9 +21,6 @@ if TYPE_CHECKING:
     from graphrag_llm.types import LLMCompletionChunk
 
 logger = logging.getLogger(__name__)
-"""
-Implementation of a generic RAG algorithm (vector search on raw text chunks)
-"""
 
 
 class BasicSearch(BaseSearch[BasicContextBuilder]):
@@ -54,16 +48,35 @@ class BasicSearch(BaseSearch[BasicContextBuilder]):
         self.callbacks = callbacks or []
         self.response_type = response_type
 
+    @staticmethod
+    def _extract_response_text(response: Any) -> str:
+        content = getattr(response, "content", None)
+        if content is not None:
+            return str(content)
+
+        choices = getattr(response, "choices", None)
+        if choices:
+            message = getattr(choices[0], "message", None)
+            if message is not None:
+                msg_content = getattr(message, "content", None)
+                if msg_content is not None:
+                    return str(msg_content)
+
+        return ""
+
+    @staticmethod
+    def _normalize_context_text(context_chunks: Any) -> str:
+        if isinstance(context_chunks, list):
+            return "\n\n".join(str(x) for x in context_chunks)
+        return str(context_chunks)
+
     async def search(
         self,
         query: str,
         conversation_history: ConversationHistory | None = None,
         **kwargs,
     ) -> SearchResult:
-        """Build rag search context that fits a single context window and generate answer for the user query."""
         start_time = time.time()
-        search_prompt = ""
-        llm_calls, prompt_tokens, output_tokens = {}, {}, {}
 
         context_result = self.context_builder.build_context(
             query=query,
@@ -72,14 +85,14 @@ class BasicSearch(BaseSearch[BasicContextBuilder]):
             **self.context_builder_params,
         )
 
-        llm_calls["build_context"] = context_result.llm_calls
-        prompt_tokens["build_context"] = context_result.prompt_tokens
-        output_tokens["build_context"] = context_result.output_tokens
+        context_text = self._normalize_context_text(context_result.context_chunks)
+        context_records = context_result.context_records
 
-        logger.debug("GENERATE ANSWER: %s. QUERY: %s", start_time, query)
+        logger.info("GENERATE ANSWER: %s. QUERY: %s", context_text, query)
+
         try:
             search_prompt = self.system_prompt.format(
-                context_data=context_result.context_chunks,
+                context_data=context_text,
                 response_type=self.response_type,
             )
 
@@ -87,57 +100,40 @@ class BasicSearch(BaseSearch[BasicContextBuilder]):
                 CompletionMessagesBuilder()
                 .add_system_message(search_prompt)
                 .add_user_message(query)
-            )
-
-            response = ""
-
-            response_stream: AsyncIterator[LLMCompletionChunk] = (
-                self.model.completion_async(
-                    messages=messages_builder.build(),
-                    stream=True,
-                    **self.model_params,
                 )
-            )  # type: ignore
-
-            async for chunk in response_stream:
-                response_text = chunk.choices[0].delta.content or ""
-                for callback in self.callbacks:
-                    callback.on_llm_new_token(response_text)
-                response += response_text
-
-            llm_calls["response"] = 1
-            prompt_tokens["response"] = len(self.tokenizer.encode(search_prompt))
-            output_tokens["response"] = len(self.tokenizer.encode(response))
 
             for callback in self.callbacks:
-                callback.on_context(context_result.context_records)
+                callback.on_context(context_records)
+
+            response_obj = await self.model.completion_async(
+                messages=messages_builder.build(),
+                **self.model_params,
+            )
+            response = self._extract_response_text(response_obj)
+
+            if response:
+                for callback in self.callbacks:
+                    callback.on_llm_new_token(response)
 
             return SearchResult(
                 response=response,
-                context_data=context_result.context_records,
-                context_text=context_result.context_chunks,
+                context_data=context_records,
+                context_text=context_text,
                 completion_time=time.time() - start_time,
-                llm_calls=1,
-                prompt_tokens=len(self.tokenizer.encode(search_prompt)),
-                output_tokens=sum(output_tokens.values()),
-                llm_calls_categories=llm_calls,
-                prompt_tokens_categories=prompt_tokens,
-                output_tokens_categories=output_tokens,
+                llm_calls=1 + getattr(context_result, "llm_calls", 0),
+                prompt_tokens=getattr(context_result, "prompt_tokens", 0),
+                output_tokens=getattr(context_result, "output_tokens", 0),
             )
-
         except Exception:
-            logger.exception("Exception in _asearch")
+            logger.exception("error generating answer")
             return SearchResult(
                 response="",
-                context_data=context_result.context_records,
-                context_text=context_result.context_chunks,
+                context_data=context_records,
+                context_text=context_text,
                 completion_time=time.time() - start_time,
-                llm_calls=1,
-                prompt_tokens=len(self.tokenizer.encode(search_prompt)),
-                output_tokens=0,
-                llm_calls_categories=llm_calls,
-                prompt_tokens_categories=prompt_tokens,
-                output_tokens_categories=output_tokens,
+                llm_calls=1 + getattr(context_result, "llm_calls", 0),
+                prompt_tokens=getattr(context_result, "prompt_tokens", 0),
+                output_tokens=getattr(context_result, "output_tokens", 0),
             )
 
     async def stream_search(
@@ -145,38 +141,55 @@ class BasicSearch(BaseSearch[BasicContextBuilder]):
         query: str,
         conversation_history: ConversationHistory | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Build basic search context that fits a single context window and generate answer for the user query."""
-        start_time = time.time()
-
         context_result = self.context_builder.build_context(
             query=query,
             conversation_history=conversation_history,
             **self.context_builder_params,
         )
-        logger.debug("GENERATE ANSWER: %s. QUERY: %s", start_time, query)
+
+        context_text = self._normalize_context_text(context_result.context_chunks)
+        context_records = context_result.context_records
+
+        logger.info("GENERATE ANSWER: %s. QUERY: %s", context_text, query)
+
         search_prompt = self.system_prompt.format(
-            context_data=context_result.context_chunks, response_type=self.response_type
+            context_data=context_text,
+            response_type=self.response_type,
         )
 
         messages_builder = (
-            CompletionMessagesBuilder()
-            .add_system_message(search_prompt)
-            .add_user_message(query)
-        )
+                CompletionMessagesBuilder()
+                .add_system_message(search_prompt)
+                .add_user_message(query)
+            )
 
         for callback in self.callbacks:
-            callback.on_context(context_result.context_records)
+            callback.on_context(context_records)
 
-        response_stream: AsyncIterator[
-            LLMCompletionChunk
-        ] = await self.model.completion_async(
-            messages=messages_builder.build(),
-            stream=True,
-            **self.model_params,
-        )  # type: ignore
+        try:
+            response_stream: AsyncIterator[LLMCompletionChunk] = await self.model.completion_async(
+                messages=messages_builder.build(),
+                stream=True,
+                **self.model_params,
+            )  # type: ignore
 
-        async for chunk in response_stream:
-            response_text = chunk.choices[0].delta.content or ""
-            for callback in self.callbacks:
-                callback.on_llm_new_token(response_text)
-            yield response_text
+            async for chunk in response_stream:
+                response_text = chunk.choices[0].delta.content or ""
+                for callback in self.callbacks:
+                    callback.on_llm_new_token(response_text)
+                yield response_text
+
+        except ValueError as e:
+            if "does not support streaming completions" not in str(e):
+                raise
+
+            response_obj = await self.model.completion_async(
+                messages=messages_builder.build(),
+                **self.model_params,
+            )
+            response_text = self._extract_response_text(response_obj)
+
+            if response_text:
+                for callback in self.callbacks:
+                    callback.on_llm_new_token(response_text)
+                yield response_text

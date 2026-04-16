@@ -41,11 +41,19 @@ class TokenizerConfig(BaseModel):
             msg = "encoding_name must be specified for TikToken tokenizer."
             raise ValueError(msg)
 
+    def _validate_local_hf_config(self) -> None:
+        """Validate local Hugging Face tokenizer configuration."""
+        if self.model_id is None or self.model_id.strip() == "":
+            msg = "model_id must be specified for LocalHF tokenizer."
+            raise ValueError(msg)
+
     @model_validator(mode="after")
     def _validate_model(self):
         """Validate the tokenizer configuration based on its type."""
         if self.type == TokenizerType.LiteLLM:
             self._validate_litellm_config()
+        elif self.type == TokenizerType.LocalHF:
+            self._validate_local_hf_config()
         elif self.type == TokenizerType.Tiktoken:
             self._validate_tiktoken_config()
         return self
