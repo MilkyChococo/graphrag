@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
         help=f"Root containing per-image BYOG workspaces. Default: {hybrid.DEFAULT_BYOG_ROOT}",
     )
     parser.add_argument(
+        "--semantic-root",
+        type=Path,
+        default=hybrid.DEFAULT_SEMANTIC_ROOT,
+        help=f"Root containing per-image semantic graph JSON files. Default: {hybrid.DEFAULT_SEMANTIC_ROOT}",
+    )
+    parser.add_argument(
         "--images-root",
         type=Path,
         default=hybrid.DEFAULT_IMAGES_ROOT,
@@ -103,9 +109,54 @@ def parse_args() -> argparse.Namespace:
         help="GraphRAG community level. Default: 2",
     )
     parser.add_argument(
+        "--query-method",
+        choices=["basic", "local", "global", "drift"],
+        default=hybrid.DEFAULT_QUERY_METHOD,
+        help=f"GraphRAG query method. Default: {hybrid.DEFAULT_QUERY_METHOD}",
+    )
+    parser.add_argument(
+        "--fallback-query-method",
+        choices=["none", "basic", "local", "global", "drift"],
+        default=hybrid.DEFAULT_FALLBACK_QUERY_METHOD,
+        help=f"Fallback GraphRAG query method. Default: {hybrid.DEFAULT_FALLBACK_QUERY_METHOD}",
+    )
+    parser.add_argument(
         "--response-type",
         default=hybrid.DEFAULT_RESPONSE_TYPE,
         help=f"GraphRAG response type. Default: {hybrid.DEFAULT_RESPONSE_TYPE}",
+    )
+    parser.add_argument(
+        "--skip-index",
+        action="store_true",
+        help="Do not auto-build missing GraphRAG query artifacts before querying.",
+    )
+    parser.add_argument(
+        "--graphrag-backend",
+        choices=["local_hf", "graphrag_api"],
+        default=hybrid.DEFAULT_GRAPHRAG_BACKEND,
+        help=f"GraphRAG inference backend. Default: {hybrid.DEFAULT_GRAPHRAG_BACKEND}",
+    )
+    parser.add_argument(
+        "--graphrag-completion-model",
+        default=hybrid.DEFAULT_GRAPHRAG_COMPLETION_MODEL,
+        help=f"Local Hugging Face generation model used when --graphrag-backend=local_hf. Default: {hybrid.DEFAULT_GRAPHRAG_COMPLETION_MODEL}",
+    )
+    parser.add_argument(
+        "--graphrag-embedding-model",
+        default=hybrid.DEFAULT_GRAPHRAG_EMBEDDING_MODEL,
+        help=f"Local Hugging Face embedding model used when --graphrag-backend=local_hf. Default: {hybrid.DEFAULT_GRAPHRAG_EMBEDDING_MODEL}",
+    )
+    parser.add_argument(
+        "--retrieval-top-k",
+        type=int,
+        default=hybrid.DEFAULT_RETRIEVAL_TOP_K,
+        help=f"Number of retrieved graph/OCR context items to feed into local_hf GraphRAG. Default: {hybrid.DEFAULT_RETRIEVAL_TOP_K}",
+    )
+    parser.add_argument(
+        "--embedding-device",
+        choices=["auto", "cpu", "cuda"],
+        default=hybrid.DEFAULT_EMBEDDING_DEVICE,
+        help=f"Device for local embedding model. Default: {hybrid.DEFAULT_EMBEDDING_DEVICE}",
     )
     parser.add_argument(
         "--output-jsonl",
@@ -175,6 +226,12 @@ def load_completed_records(path: Path) -> tuple[set[int], list[dict[str, Any]]]:
     return completed_ids, records
 
 
+def is_success_record(record: dict[str, Any]) -> bool:
+    if "success" in record:
+        return bool(record["success"])
+    return bool(str(record.get("answer", "")).strip())
+
+
 def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -228,6 +285,12 @@ def write_submission_checkpoint(
 async def main_async() -> None:
     args = parse_args()
     source_payload, annotations = load_annotations(args.annotations_file.resolve())
+    byog_root = args.byog_root.resolve()
+    semantic_root = args.semantic_root.resolve()
+    images_root = args.images_root.resolve()
+    fallback_query_method = (
+        None if args.fallback_query_method == "none" else args.fallback_query_method
+    )
     if args.limit is not None:
         annotations = annotations[: args.limit]
 
@@ -245,14 +308,22 @@ async def main_async() -> None:
             output_path=args.output_submission.resolve(),
         )
 
-    workspace_status_cache: dict[str, tuple[Path, bool]] = {}
+    workspace_status_cache: dict[str, Path] = {}
     qa_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
     method_counts: Counter[str] = Counter(record.get("used_method", "unknown") for record in existing_records)
+    query_method_counts: Counter[str] = Counter(
+        record.get("query_method_used", "unknown")
+        for record in existing_records
+        if record.get("query_method_used")
+    )
     fallback_counts: Counter[str] = Counter()
     graph_workspace_hits = 0
     graph_workspace_misses = 0
+    index_builds = 0
     cache_hits = 0
+    success_count = sum(1 for record in existing_records if is_success_record(record))
+    fail_count = len(existing_records) - success_count
 
     progress = tqdm(
         annotation_records,
@@ -265,7 +336,7 @@ async def main_async() -> None:
         annotation_id = int(ann["id"])
         image_id = str(ann["image_id"])
         question = str(ann["question"])
-        image_path = hybrid.resolve_image_path(args.images_root.resolve(), image_id)
+        image_path = hybrid.resolve_image_path(images_root, image_id)
         cache_key = (image_id, question)
 
         if cache_key in qa_cache:
@@ -276,10 +347,16 @@ async def main_async() -> None:
                 "question": question,
                 "answer": cached["answer"],
                 "used_method": cached["used_method"],
+                "success": cached.get("success", bool(str(cached["answer"]).strip())),
+                "error": cached.get("error"),
                 "cache_hit": True,
                 "fallback_reason": cached.get("fallback_reason"),
                 "workspace_root": cached.get("workspace_root"),
                 "image_path": str(image_path),
+                "query_method_requested": cached.get("query_method_requested", args.query_method),
+                "query_method_used": cached.get("query_method_used"),
+                "index_built": cached.get("index_built", False),
+                "graphrag_backend": cached.get("graphrag_backend", args.graphrag_backend),
                 "vlm_backend": cached.get("vlm_backend", args.vlm_backend),
                 "vlm_model": cached.get("vlm_model", args.vlm_model),
                 "created_at": now_iso(),
@@ -293,59 +370,91 @@ async def main_async() -> None:
             )
             method_counts[payload["used_method"]] += 1
             cache_hits += 1
+            if payload["success"]:
+                success_count += 1
+            else:
+                fail_count += 1
             progress.set_postfix(
                 graphrag=method_counts["graphrag"],
                 vlm=method_counts["vlm"],
+                success=success_count,
+                fail=fail_count,
                 cache=cache_hits,
             )
             continue
 
-        workspace_root, queryable = workspace_status_cache.get(image_id, (Path(), False))
+        workspace_root = workspace_status_cache.get(image_id, Path())
         if not workspace_root:
-            workspace_root = hybrid.resolve_workspace(args.byog_root.resolve(), image_id)
-            queryable = hybrid.has_queryable_workspace(workspace_root)
-            workspace_status_cache[image_id] = (workspace_root, queryable)
+            workspace_root = hybrid.resolve_workspace(byog_root, image_id)
+            workspace_status_cache[image_id] = workspace_root
 
         answer = ""
         used_method = ""
         fallback_reason: str | None = None
+        query_method_used: str | None = None
+        index_built = False
+        error_message: str | None = None
+        success = False
 
-        if queryable:
-            graph_workspace_hits += 1
-            try:
-                answer = await hybrid.run_graphrag_query(
-                    community_level=args.community_level,
-                    response_type=args.response_type,
-                    workspace_root=workspace_root,
-                    question=question,
-                )
-                used_method = "graphrag"
-            except Exception as exc:  # pragma: no cover - runtime fallback
-                fallback_reason = f"GraphRAG query failed: {type(exc).__name__}: {exc}"
-        else:
-            graph_workspace_misses += 1
-            if not workspace_root.exists():
-                fallback_reason = "Per-image BYOG workspace not found"
+        try:
+            if workspace_root.exists():
+                graph_workspace_hits += 1
+                try:
+                    graphrag_payload = await hybrid.answer_with_graphrag(
+                        image_id=image_id,
+                        question=question,
+                        byog_root=byog_root,
+                        semantic_root=semantic_root,
+                        images_root=images_root,
+                        query_method=args.query_method,
+                        fallback_query_method=fallback_query_method,
+                        community_level=args.community_level,
+                        response_type=args.response_type,
+                        auto_index=not args.skip_index,
+                        backend=args.graphrag_backend,
+                        completion_model_name=args.graphrag_completion_model,
+                        embedding_model_name=args.graphrag_embedding_model,
+                        retrieval_top_k=args.retrieval_top_k,
+                        temperature=args.temperature,
+                        max_new_tokens=args.max_new_tokens,
+                        embedding_device=args.embedding_device,
+                    )
+                    answer = graphrag_payload["answer"]
+                    used_method = graphrag_payload["used_method"]
+                    fallback_reason = graphrag_payload.get("fallback_reason")
+                    query_method_used = graphrag_payload.get("query_method_used")
+                    index_built = bool(graphrag_payload.get("index_built"))
+                    if index_built:
+                        index_builds += 1
+                except Exception as exc:  # pragma: no cover - runtime fallback
+                    fallback_reason = f"GraphRAG query failed: {type(exc).__name__}: {exc}"
             else:
-                fallback_reason = "Per-image BYOG workspace exists but is not indexed/queryable yet"
+                graph_workspace_misses += 1
+                fallback_reason = "Per-image BYOG workspace not found"
 
-        if not answer:
-            answer = await hybrid.run_vlm_query(
-                image_path=image_path,
-                question=question,
-                backend=args.vlm_backend,
-                model_name=args.vlm_model,
-                max_retries=args.max_retries,
-                temperature=args.temperature,
-                max_new_tokens=args.max_new_tokens,
-                provider=args.vlm_provider,
-                api_base=args.vlm_api_base,
-                env_file=args.env_file,
-                api_key_env=args.api_key_env,
-            )
-            used_method = "vlm"
-            if fallback_reason:
-                fallback_counts[fallback_reason] += 1
+            if not answer:
+                answer = await hybrid.run_vlm_query(
+                    image_path=image_path,
+                    question=question,
+                    backend=args.vlm_backend,
+                    model_name=args.vlm_model,
+                    max_retries=args.max_retries,
+                    temperature=args.temperature,
+                    max_new_tokens=args.max_new_tokens,
+                    provider=args.vlm_provider,
+                    api_base=args.vlm_api_base,
+                    env_file=args.env_file,
+                    api_key_env=args.api_key_env,
+                )
+                used_method = "vlm"
+                if fallback_reason:
+                    fallback_counts[fallback_reason] += 1
+            success = bool(str(answer).strip())
+        except Exception as exc:  # pragma: no cover - keep full-run resilient
+            used_method = used_method or "failed"
+            answer = ""
+            success = False
+            error_message = f"{type(exc).__name__}: {exc}"
 
         payload = {
             "annotation_id": annotation_id,
@@ -353,10 +462,16 @@ async def main_async() -> None:
             "question": question,
             "answer": answer,
             "used_method": used_method,
+            "success": success,
+            "error": error_message,
             "cache_hit": False,
             "fallback_reason": fallback_reason,
             "workspace_root": str(workspace_root),
             "image_path": str(image_path),
+            "query_method_requested": args.query_method,
+            "query_method_used": query_method_used,
+            "index_built": index_built,
+            "graphrag_backend": args.graphrag_backend,
             "vlm_backend": args.vlm_backend,
             "vlm_model": args.vlm_model,
             "created_at": now_iso(),
@@ -371,15 +486,29 @@ async def main_async() -> None:
         qa_cache[cache_key] = {
             "answer": answer,
             "used_method": used_method,
+            "success": success,
+            "error": error_message,
             "fallback_reason": fallback_reason,
             "workspace_root": str(workspace_root),
+            "query_method_requested": args.query_method,
+            "query_method_used": query_method_used,
+            "index_built": index_built,
+            "graphrag_backend": args.graphrag_backend,
             "vlm_backend": args.vlm_backend,
             "vlm_model": args.vlm_model,
         }
         method_counts[used_method] += 1
+        if query_method_used:
+            query_method_counts[query_method_used] += 1
+        if success:
+            success_count += 1
+        else:
+            fail_count += 1
         progress.set_postfix(
             graphrag=method_counts["graphrag"],
             vlm=method_counts["vlm"],
+            success=success_count,
+            fail=fail_count,
             cache=cache_hits,
         )
 
@@ -397,15 +526,22 @@ async def main_async() -> None:
         "annotations_file": str(args.annotations_file.resolve()),
         "output_jsonl": str(args.output_jsonl.resolve()),
         "output_submission": str(args.output_submission.resolve()),
+        "query_method_requested": args.query_method,
+        "fallback_query_method": fallback_query_method,
+        "graphrag_backend": args.graphrag_backend,
         "vlm_backend": args.vlm_backend,
         "vlm_model": args.vlm_model,
         "requested_count": len(annotations),
         "completed_count": len(existing_records),
         "newly_processed_count": len(annotation_records),
         "resumed_count": len(completed_ids),
+        "success_count": success_count,
+        "fail_count": fail_count,
         "method_counts": dict(method_counts),
+        "query_method_counts": dict(query_method_counts),
         "graph_workspace_hits": graph_workspace_hits,
         "graph_workspace_misses": graph_workspace_misses,
+        "index_builds": index_builds,
         "cache_hits": cache_hits,
         "fallback_counts": dict(fallback_counts),
     }

@@ -31,10 +31,20 @@ def get_tokenizer(
         An instance of a Tokenizer.
     """
     if model_config is not None:
+        tokenizer_type = (
+            TokenizerType.LocalHF
+            if model_config.type == "local_hf"
+            else TokenizerType.LiteLLM
+        )
+        model_id = (
+            model_config.model
+            if tokenizer_type == TokenizerType.LocalHF
+            else f"{model_config.model_provider}/{model_config.model}"
+        )
         return create_tokenizer(
             TokenizerConfig(
-                type=TokenizerType.LiteLLM,
-                model_id=f"{model_config.model_provider}/{model_config.model}",
+                type=tokenizer_type,
+                model_id=model_id,
             )
         )
 

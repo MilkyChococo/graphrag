@@ -103,9 +103,17 @@ class ModelConfig(BaseModel):
             msg = "api_key must be set when auth_method=api_key."
             raise ValueError(msg)
 
+    def _validate_local_hf_config(self) -> None:
+        """Validate local Hugging Face specific configuration."""
+        if not self.model or self.model.strip() == "":
+            msg = "model must be set when type=local_hf."
+            raise ValueError(msg)
+
     @model_validator(mode="after")
     def _validate_model(self):
         """Validate model configuration after initialization."""
         if self.type == LLMProviderType.LiteLLM:
             self._validate_lite_llm_config()
+        elif self.type == LLMProviderType.LocalHF:
+            self._validate_local_hf_config()
         return self
