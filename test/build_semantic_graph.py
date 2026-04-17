@@ -23,7 +23,6 @@ from graphrag.prompts.index.summarize_descriptions import (
 )
 from graphrag_llm.completion import create_completion
 from graphrag_llm.config.model_config import ModelConfig
-from graphrag_llm.config.types import AuthMethod
 from tqdm import tqdm
 
 
@@ -31,7 +30,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_OCR_ROOT = SCRIPT_DIR / "OCR_img"
 DEFAULT_OUTPUT_ROOT = SCRIPT_DIR / "semantic_graphs"
 DEFAULT_ENV_FILE = SCRIPT_DIR.parent / ".env"
-DEFAULT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 DEFAULT_ENTITY_TYPES = [
     "organization",
     "person",
@@ -78,7 +77,7 @@ class TextUnit:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build a GraphRAG-style semantic graph from OCR using Gemini."
+        description="Build a GraphRAG-style semantic graph from OCR using a local Hugging Face model."
     )
     parser.add_argument(
         "--ocr-root",
@@ -96,23 +95,23 @@ def parse_args() -> argparse.Namespace:
         "--env-file",
         type=Path,
         default=DEFAULT_ENV_FILE,
-        help=f".env file used to resolve GEMINI_API_KEY. Default: {DEFAULT_ENV_FILE}",
+        help=f"Optional .env file used to resolve HF_TOKEN or HUGGINGFACE_API_KEY for gated model downloads. Default: {DEFAULT_ENV_FILE}",
     )
     parser.add_argument(
         "--api-key-env",
-        default="GEMINI_API_KEY",
-        help="Environment variable holding the Gemini API key.",
+        default="HUGGINGFACE_API_KEY",
+        help="Optional environment variable mirrored to HF_TOKEN for gated Hugging Face model downloads.",
     )
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help=f"Gemini model name. Default: {DEFAULT_MODEL}",
+        help=f"Local Hugging Face model name. Default: {DEFAULT_MODEL}",
     )
     parser.add_argument(
         "--max-retries",
         type=int,
         default=3,
-        help="Maximum retry attempts for Gemini calls. Default: 3",
+        help="Maximum retry attempts for local completion calls. Default: 3",
     )
     parser.add_argument(
         "--image-id",
@@ -231,9 +230,7 @@ def resolve_api_key(args: argparse.Namespace) -> str:
         os.environ[args.api_key_env] = env_value
         return env_value
 
-    raise SystemExit(
-        f"Missing API key. Expected {args.api_key_env} in environment or {args.env_file}"
-    )
+    return ""
 
 
 def normalize_whitespace(text: str) -> str:
@@ -500,13 +497,16 @@ def write_json(path: Path, payload: Any) -> None:
         handle.write("\n")
 
 
-def build_model(args: argparse.Namespace, api_key: str):
+def build_model(args: argparse.Namespace):
     model_config = ModelConfig(
-        model_provider="gemini",
+        type="local_hf",
+        model_provider="local_hf",
         model=args.model,
-        api_key=api_key,
-        auth_method=AuthMethod.ApiKey,
+        call_args={"temperature": 0, "max_tokens": 512},
         retry={"type": "exponential_backoff", "max_retries": args.max_retries},
+        trust_remote_code=True,
+        device_map="auto",
+        torch_dtype="auto",
     )
     return create_completion(model_config)
 
@@ -558,7 +558,7 @@ def build_graph_payload(
         "image_id": image_id,
         "image_name": image_name,
         "model": {
-            "provider": "gemini",
+            "provider": "local_hf",
             "model": args.model,
             "max_retries": args.max_retries,
             "max_gleanings": args.max_gleanings,
@@ -745,8 +745,10 @@ async def main_async() -> None:
                 continue
 
         if model is None:
-            api_key = resolve_api_key(args)
-            model = build_model(args, api_key)
+            hf_token = resolve_api_key(args)
+            if hf_token:
+                os.environ.setdefault("HF_TOKEN", hf_token)
+            model = build_model(args)
 
         try:
             summary = await process_image(image_id, args, model)
