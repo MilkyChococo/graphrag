@@ -396,19 +396,38 @@ async def main_async() -> None:
     skipped_existing: list[str] = []
     missing_or_empty: list[str] = []
     failures: dict[str, str] = {}
-    for image_id in tqdm(image_ids, desc="Semantic graphs", unit="image"):
+    progress = tqdm(image_ids, desc="Semantic graphs", unit="image", dynamic_ncols=True)
+    for image_id in progress:
         if args.resume and (args.output_root / image_id / "graph.json").exists():
             skipped_existing.append(image_id)
+            progress.set_postfix(
+                processed=len(summaries),
+                skipped=len(skipped_existing),
+                missing=len(missing_or_empty),
+                failed=len(failures),
+            )
             continue
         try:
             summary = await build_one(image_id, args, model, image_path_map)
         except Exception as exc:
             failures[image_id] = f"{type(exc).__name__}: {exc}"
+            progress.set_postfix(
+                processed=len(summaries),
+                skipped=len(skipped_existing),
+                missing=len(missing_or_empty),
+                failed=len(failures),
+            )
             continue
         if summary is None:
             missing_or_empty.append(image_id)
         else:
             summaries.append(summary)
+        progress.set_postfix(
+            processed=len(summaries),
+            skipped=len(skipped_existing),
+            missing=len(missing_or_empty),
+            failed=len(failures),
+        )
         if args.sleep_seconds > 0:
             await asyncio.sleep(args.sleep_seconds)
 
