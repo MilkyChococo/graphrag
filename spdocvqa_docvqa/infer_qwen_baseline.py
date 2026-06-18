@@ -41,12 +41,6 @@ OCR and graph context:
 
 Short answer:"""
 
-IMAGE_ONLY_PROMPT_TEMPLATE = """Question: {question}
-
-Answer using the visible information in the image.
-Return only the final short answer."""
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run SP-DocVQA baseline inference with local Transformers Qwen2.5-VL-7B-Instruct over semantic/BYOG context."
@@ -198,34 +192,18 @@ async def main_async() -> None:
         graph_path = args.semantic_root / image_id / "graph.json"
         workspace_root = args.byog_root / image_id
         if not graph_path.exists():
-            missing_semantic += 1
-            prompt = IMAGE_ONLY_PROMPT_TEMPLATE.format(question=row["question"])
-            image_used = image_path.exists()
-            if image_used:
-                answer = await complete_with_image(
-                    model=model,
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=prompt,
-                    image_path=image_path,
-                    image_detail=args.image_detail,
-                    temperature=args.temperature,
-                )
-            else:
-                missing_image += 1
-                answer = await complete_text(
-                    model=model,
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=prompt,
-                    temperature=args.temperature,
-                )
+            answer = "Not enough information"
             detail = {
-                "reason": "missing_semantic_graph_image_only" if image_used else "missing_semantic_graph_text_only",
+                "reason": "missing_semantic_graph",
                 "graph_path": str(graph_path),
                 "image_path": str(image_path),
-                "image_used": image_used,
+                "image_used": False,
                 "workspace_root": str(workspace_root),
                 "byog_exists": workspace_root.exists(),
             }
+            missing_semantic += 1
+            if not image_path.exists():
+                missing_image += 1
         else:
             graph = load_json(graph_path)
             context = build_context(graph, args.max_context_chars)
