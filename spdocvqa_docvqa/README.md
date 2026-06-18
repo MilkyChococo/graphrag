@@ -4,6 +4,10 @@ This folder is a self-contained SP-DocVQA baseline. It only uses images listed i
 `../test_v1.0.json` and maps each image path like `documents/rnbx0223_193.png` to
 `../spdocvqa_ocr/rnbx0223_193.json`.
 
+Image files are read from the repo root by default, so `documents/rnbx0223_193.png`
+is expected at `../documents/rnbx0223_193.png`. Use `--images-root` if the image
+folder lives elsewhere.
+
 Default Qwen API settings:
 
 - model: `Qwen/Qwen2.5-VL-7B-Instruct`
@@ -22,11 +26,13 @@ Outputs:
 - `spdocvqa_docvqa/graphs/<image_id>/graph.json`
 - `spdocvqa_docvqa/graphs/build_summary.json`
 
-## 2. Semantic Graphs With Qwen API
+## 2. Semantic Graphs With Qwen-VL Hugging Face API
 
 ```powershell
 python spdocvqa_docvqa\build_semantic_graphs.py --resume
 ```
+
+This sends both OCR text and the page image to Qwen2.5-VL when the image file exists.
 
 Outputs:
 
@@ -50,11 +56,13 @@ Outputs:
 - `spdocvqa_docvqa/byog_workspaces/<image_id>/`
 - `spdocvqa_docvqa/byog_workspaces/export_manifest.json`
 
-## 4. Inference With Qwen API
+## 4. Inference With Qwen-VL Hugging Face API
 
 ```powershell
 python spdocvqa_docvqa\infer_qwen_baseline.py --resume
 ```
+
+This sends the page image plus semantic/BYOG context to Qwen2.5-VL.
 
 Outputs:
 

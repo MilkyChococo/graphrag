@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import mimetypes
 import os
 from pathlib import Path
 from typing import Any
@@ -79,6 +81,39 @@ async def complete_text(
         CompletionMessagesBuilder()
         .add_system_message(system_prompt)
         .add_user_message(user_prompt)
+        .build()
+    )
+    response = await model.completion_async(messages=messages, temperature=temperature)
+    return str(response.content or "").strip()
+
+
+def image_to_data_url(image_path: Path) -> str:
+    mime_type = mimetypes.guess_type(image_path.name)[0] or "image/png"
+    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+async def complete_with_image(
+    *,
+    model: Any,
+    system_prompt: str,
+    user_prompt: str,
+    image_path: Path,
+    image_detail: str = "high",
+    temperature: float = 0.0,
+) -> str:
+    from graphrag_llm.utils import CompletionContentPartBuilder, CompletionMessagesBuilder
+
+    content = (
+        CompletionContentPartBuilder()
+        .add_text_part(user_prompt)
+        .add_image_part(image_to_data_url(image_path), image_detail)  # type: ignore[arg-type]
+        .build()
+    )
+    messages = (
+        CompletionMessagesBuilder()
+        .add_system_message(system_prompt)
+        .add_user_message(content)
         .build()
     )
     response = await model.completion_async(messages=messages, temperature=temperature)

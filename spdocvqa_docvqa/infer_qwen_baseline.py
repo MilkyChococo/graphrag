@@ -15,6 +15,7 @@ from model_api import (
     DEFAULT_MODEL,
     DEFAULT_PROVIDER,
     build_completion_model,
+    complete_with_image,
     complete_text,
     resolve_api_key,
 )
@@ -23,6 +24,7 @@ from model_api import (
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_TEST_FILE = REPO_ROOT / "test_v1.0.json"
+DEFAULT_IMAGES_ROOT = REPO_ROOT
 DEFAULT_SEMANTIC_ROOT = SCRIPT_DIR / "semantic_graphs"
 DEFAULT_BYOG_ROOT = SCRIPT_DIR / "byog_workspaces"
 DEFAULT_OUTPUT_ROOT = SCRIPT_DIR / "qwen_predictions"
@@ -45,6 +47,7 @@ def parse_args() -> argparse.Namespace:
         description="Run SP-DocVQA baseline inference with the Hugging Face Qwen2.5-VL-7B-Instruct API over semantic/BYOG context."
     )
     parser.add_argument("--test-file", type=Path, default=DEFAULT_TEST_FILE)
+    parser.add_argument("--images-root", type=Path, default=DEFAULT_IMAGES_ROOT)
     parser.add_argument("--semantic-root", type=Path, default=DEFAULT_SEMANTIC_ROOT)
     parser.add_argument("--byog-root", type=Path, default=DEFAULT_BYOG_ROOT)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
@@ -55,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--image-detail", choices=["auto", "low", "high"], default="high")
     parser.add_argument("--max-context-chars", type=int, default=12000)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--resume", action="store_true")
@@ -83,6 +87,10 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
 
 def image_stem(image_value: str) -> str:
     return Path(str(image_value)).stem
+
+
+def resolve_image_path(images_root: Path, image_value: str) -> Path:
+    return (images_root / str(image_value)).resolve()
 
 
 def load_completed(path: Path) -> dict[int, dict[str, Any]]:
@@ -180,6 +188,7 @@ async def main_async() -> None:
         if question_id in completed:
             continue
         image_id = image_stem(row["image"])
+        image_path = resolve_image_path(args.images_root, str(row["image"]))
         graph_path = args.semantic_root / image_id / "graph.json"
         workspace_root = args.byog_root / image_id
         if not graph_path.exists():
@@ -189,15 +198,29 @@ async def main_async() -> None:
         else:
             graph = load_json(graph_path)
             context = build_context(graph, args.max_context_chars)
-            answer = await complete_text(
-                model=model,
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=USER_PROMPT_TEMPLATE.format(question=row["question"], context=context),
-                temperature=args.temperature,
-            )
+            prompt = USER_PROMPT_TEMPLATE.format(question=row["question"], context=context)
+            image_used = image_path.exists()
+            if image_used:
+                answer = await complete_with_image(
+                    model=model,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=prompt,
+                    image_path=image_path,
+                    image_detail=args.image_detail,
+                    temperature=args.temperature,
+                )
+            else:
+                answer = await complete_text(
+                    model=model,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=prompt,
+                    temperature=args.temperature,
+                )
             detail = {
-                "reason": "qwen_semantic_byog_context",
+                "reason": "qwen_vl_image_semantic_byog_context" if image_used else "qwen_text_semantic_byog_context",
                 "graph_path": str(graph_path),
+                "image_path": str(image_path),
+                "image_used": image_used,
                 "workspace_root": str(workspace_root),
                 "byog_exists": workspace_root.exists(),
             }
@@ -227,6 +250,7 @@ async def main_async() -> None:
             "created_at": now_iso(),
             "test_file": str(args.test_file.resolve()),
             "semantic_root": str(args.semantic_root.resolve()),
+            "images_root": str(args.images_root.resolve()),
             "byog_root": str(args.byog_root.resolve()),
             "output_jsonl": str(output_jsonl.resolve()),
             "output_submission": str(output_submission.resolve()),

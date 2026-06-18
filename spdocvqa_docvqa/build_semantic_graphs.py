@@ -17,6 +17,7 @@ from model_api import (
     DEFAULT_MODEL,
     DEFAULT_PROVIDER,
     build_completion_model,
+    complete_with_image,
     complete_text,
     extract_json_object,
     resolve_api_key,
@@ -27,6 +28,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_TEST_FILE = REPO_ROOT / "test_v1.0.json"
 DEFAULT_OCR_ROOT = REPO_ROOT / "spdocvqa_ocr"
+DEFAULT_IMAGES_ROOT = REPO_ROOT
 DEFAULT_OUTPUT_ROOT = SCRIPT_DIR / "semantic_graphs"
 
 SYSTEM_PROMPT = """You build a compact semantic graph from OCR text for DocVQA.
@@ -64,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--test-file", type=Path, default=DEFAULT_TEST_FILE)
     parser.add_argument("--ocr-root", type=Path, default=DEFAULT_OCR_ROOT)
+    parser.add_argument("--images-root", type=Path, default=DEFAULT_IMAGES_ROOT)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     parser.add_argument("--api-key-env", default=DEFAULT_API_KEY_ENV)
@@ -72,6 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--image-detail", choices=["auto", "low", "high"], default="high")
     parser.add_argument("--max-text-unit-chars", type=int, default=6000)
     parser.add_argument("--image-id", action="append", default=[])
     parser.add_argument("--limit", type=int, default=None)
@@ -107,15 +111,30 @@ def image_stem(image_value: str) -> str:
     return Path(str(image_value)).stem
 
 
+def load_test_rows(test_file: Path) -> list[dict[str, Any]]:
+    payload = load_json(test_file)
+    rows = payload.get("data", [])
+    return rows if isinstance(rows, list) else []
+
+
 def collect_test_image_ids(test_file: Path, requested: list[str], limit: int | None) -> list[str]:
     if requested:
         image_ids = requested
     else:
-        payload = load_json(test_file)
-        image_ids = sorted({image_stem(row["image"]) for row in payload.get("data", []) if row.get("image")})
+        image_ids = sorted({image_stem(row["image"]) for row in load_test_rows(test_file) if row.get("image")})
     if limit is not None:
         image_ids = image_ids[:limit]
     return image_ids
+
+
+def build_image_path_map(test_file: Path, images_root: Path) -> dict[str, Path]:
+    paths: dict[str, Path] = {}
+    for row in load_test_rows(test_file):
+        image_value = row.get("image")
+        if not image_value:
+            continue
+        paths[image_stem(str(image_value))] = (images_root / str(image_value)).resolve()
+    return paths
 
 
 def polygon_to_bbox(points: list[Any]) -> list[float] | None:
@@ -244,7 +263,12 @@ def normalize_graph_payload(payload: dict[str, Any], text_unit_ids: set[str]) ->
     return entities, relationships
 
 
-async def build_one(image_id: str, args: argparse.Namespace, model: Any) -> dict[str, Any] | None:
+async def build_one(
+    image_id: str,
+    args: argparse.Namespace,
+    model: Any,
+    image_path_map: dict[str, Path],
+) -> dict[str, Any] | None:
     ocr_file = args.ocr_root / f"{image_id}.json"
     if not ocr_file.exists():
         return None
@@ -257,12 +281,24 @@ async def build_one(image_id: str, args: argparse.Namespace, model: Any) -> dict
         text_unit_ids=", ".join(unit["id"] for unit in text_units),
         ocr_text="\n\n".join(unit["text"] for unit in text_units),
     )
-    raw = await complete_text(
-        model=model,
-        system_prompt=SYSTEM_PROMPT,
-        user_prompt=prompt,
-        temperature=args.temperature,
-    )
+    image_path = image_path_map.get(image_id)
+    image_used = bool(image_path and image_path.exists())
+    if image_path and image_path.exists():
+        raw = await complete_with_image(
+            model=model,
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=prompt,
+            image_path=image_path,
+            image_detail=args.image_detail,
+            temperature=args.temperature,
+        )
+    else:
+        raw = await complete_text(
+            model=model,
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=prompt,
+            temperature=args.temperature,
+        )
     entities, relationships = normalize_graph_payload(extract_json_object(raw), text_unit_ids)
     graph = {
         "graph_type": "spdocvqa_semantic_ocr_graph",
@@ -275,6 +311,8 @@ async def build_one(image_id: str, args: argparse.Namespace, model: Any) -> dict
             "api_base": args.api_base,
         },
         "source_files": {"ocr_file": str(ocr_file.resolve())},
+        "image_path": str(image_path) if image_path else None,
+        "image_used": image_used,
         "ocr_overview": {
             "line_count": len(rows),
             "transcript_preview": [f"[{row['order']}] {row['text']}" for row in rows[:30]],
@@ -303,6 +341,7 @@ async def build_one(image_id: str, args: argparse.Namespace, model: Any) -> dict
 async def main_async() -> None:
     args = parse_args()
     image_ids = collect_test_image_ids(args.test_file, expand_image_ids(args.image_id), args.limit)
+    image_path_map = build_image_path_map(args.test_file, args.images_root.resolve())
     api_key = resolve_api_key(args.env_file, args.api_key_env)
     model = build_completion_model(
         provider=args.provider,
@@ -321,7 +360,7 @@ async def main_async() -> None:
             skipped_existing.append(image_id)
             continue
         try:
-            summary = await build_one(image_id, args, model)
+            summary = await build_one(image_id, args, model, image_path_map)
         except Exception as exc:
             failures[image_id] = f"{type(exc).__name__}: {exc}"
             continue
@@ -338,6 +377,7 @@ async def main_async() -> None:
             "created_at": now_iso(),
             "test_file": str(args.test_file.resolve()),
             "ocr_root": str(args.ocr_root.resolve()),
+            "images_root": str(args.images_root.resolve()),
             "output_root": str(args.output_root.resolve()),
             "model": args.model,
             "provider": args.provider,
