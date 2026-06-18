@@ -263,6 +263,40 @@ def normalize_graph_payload(payload: dict[str, Any], text_unit_ids: set[str]) ->
     return entities, relationships
 
 
+def build_fallback_entities(
+    rows: list[dict[str, Any]],
+    text_units: list[dict[str, Any]],
+    max_entities: int = 40,
+) -> list[dict[str, Any]]:
+    text_unit_id = str(text_units[0]["id"]) if text_units else ""
+    entities: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        text = normalize_title(row.get("text"))
+        if not text or text in seen:
+            continue
+        word_count = len(text.split())
+        has_digit = any(char.isdigit() for char in text)
+        looks_useful = word_count <= 12 or has_digit or ":" in text
+        if not looks_useful:
+            continue
+        seen.add(text)
+        entity_type = "number" if has_digit and word_count <= 4 else "field" if ":" in text else "other"
+        entities.append(
+            {
+                "title": text,
+                "type": entity_type,
+                "description": f"OCR line {row.get('order')}: {text}",
+                "descriptions_raw": [f"OCR line {row.get('order')}: {text}"],
+                "text_unit_ids": [text_unit_id] if text_unit_id else [],
+                "frequency": 1,
+            }
+        )
+        if len(entities) >= max_entities:
+            break
+    return entities
+
+
 async def build_one(
     image_id: str,
     args: argparse.Namespace,
@@ -299,7 +333,13 @@ async def build_one(
             user_prompt=prompt,
             temperature=args.temperature,
         )
-    entities, relationships = normalize_graph_payload(extract_json_object(raw), text_unit_ids)
+    parsed_payload = extract_json_object(raw)
+    entities, relationships = normalize_graph_payload(parsed_payload, text_unit_ids)
+    parse_status = "model_json"
+    if not parsed_payload:
+        parse_status = "fallback_ocr_entities"
+        entities = build_fallback_entities(rows, text_units)
+        relationships = []
     graph = {
         "graph_type": "spdocvqa_semantic_ocr_graph",
         "created_at": now_iso(),
@@ -322,6 +362,7 @@ async def build_one(
         "relationship_count": len(relationships),
         "entities": entities,
         "relationships": relationships,
+        "semantic_parse_status": parse_status,
         "raw_model_output": raw,
     }
     summary = {

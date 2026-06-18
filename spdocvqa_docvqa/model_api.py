@@ -272,6 +272,19 @@ def extract_json_object(text: str) -> dict[str, Any]:
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start >= 0 and end > start:
-        payload = json.loads(cleaned[start : end + 1])
+        try:
+            payload = json.loads(cleaned[start : end + 1])
+            return payload if isinstance(payload, dict) else {}
+        except json.JSONDecodeError:
+            pass
+
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(cleaned):
+        if char != "{":
+            continue
+        try:
+            payload, _end = decoder.raw_decode(cleaned[index:])
+        except json.JSONDecodeError:
+            continue
         return payload if isinstance(payload, dict) else {}
     return {}
