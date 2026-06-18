@@ -41,6 +41,11 @@ OCR and graph context:
 
 Short answer:"""
 
+IMAGE_ONLY_PROMPT_TEMPLATE = """Question: {question}
+
+Answer using the visible information in the image.
+Return only the final short answer."""
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -182,6 +187,7 @@ async def main_async() -> None:
     )
 
     missing_semantic = 0
+    missing_image = 0
     processed = 0
     for row in tqdm(questions, desc="Qwen DocVQA inference", unit="question"):
         question_id = int(row["questionId"])
@@ -192,9 +198,34 @@ async def main_async() -> None:
         graph_path = args.semantic_root / image_id / "graph.json"
         workspace_root = args.byog_root / image_id
         if not graph_path.exists():
-            answer = "Not enough information"
-            detail = {"reason": "missing_semantic_graph", "graph_path": str(graph_path)}
             missing_semantic += 1
+            prompt = IMAGE_ONLY_PROMPT_TEMPLATE.format(question=row["question"])
+            image_used = image_path.exists()
+            if image_used:
+                answer = await complete_with_image(
+                    model=model,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=prompt,
+                    image_path=image_path,
+                    image_detail=args.image_detail,
+                    temperature=args.temperature,
+                )
+            else:
+                missing_image += 1
+                answer = await complete_text(
+                    model=model,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=prompt,
+                    temperature=args.temperature,
+                )
+            detail = {
+                "reason": "missing_semantic_graph_image_only" if image_used else "missing_semantic_graph_text_only",
+                "graph_path": str(graph_path),
+                "image_path": str(image_path),
+                "image_used": image_used,
+                "workspace_root": str(workspace_root),
+                "byog_exists": workspace_root.exists(),
+            }
         else:
             graph = load_json(graph_path)
             context = build_context(graph, args.max_context_chars)
@@ -259,6 +290,7 @@ async def main_async() -> None:
             "resumed_count": len(completed),
             "record_count": len(records),
             "missing_semantic_count": missing_semantic,
+            "missing_image_count": missing_image,
             "method": "qwen2_5_vl_7b_hf_semantic_byog_baseline",
             "model": args.model,
             "provider": args.provider,
