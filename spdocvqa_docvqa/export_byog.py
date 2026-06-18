@@ -19,7 +19,7 @@ DEFAULT_SEMANTIC_ROOT = SCRIPT_DIR / "semantic_graphs"
 DEFAULT_BYOG_ROOT = SCRIPT_DIR / "byog_workspaces"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 DEFAULT_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
-DEFAULT_PROVIDER = "huggingface"
+DEFAULT_PROVIDER = "local_hf"
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3"
 
 
@@ -124,11 +124,12 @@ def main() -> None:
             embedding_api_key_env=args.embedding_api_key_env,
             embedding_api_base_env=args.embedding_api_base_env,
         )
-        rewrite_completion_settings_for_api(
-            workspace_root=args.workspace_root / image_id,
-            provider=args.completion_provider,
-            model=args.completion_model,
-        )
+        if args.completion_provider != "local_hf":
+            rewrite_completion_settings_for_api(
+                workspace_root=args.workspace_root / image_id,
+                provider=args.completion_provider,
+                model=args.completion_model,
+            )
         manifests.append(manifest)
 
     write_manifest(

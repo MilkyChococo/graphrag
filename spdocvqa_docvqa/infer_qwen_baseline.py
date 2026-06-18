@@ -44,7 +44,7 @@ Short answer:"""
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run SP-DocVQA baseline inference with the Hugging Face Qwen2.5-VL-7B-Instruct API over semantic/BYOG context."
+        description="Run SP-DocVQA baseline inference with local Transformers Qwen2.5-VL-7B-Instruct over semantic/BYOG context."
     )
     parser.add_argument("--test-file", type=Path, default=DEFAULT_TEST_FILE)
     parser.add_argument("--images-root", type=Path, default=DEFAULT_IMAGES_ROOT)
