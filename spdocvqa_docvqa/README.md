@@ -8,12 +8,18 @@ Image files are read from the repo root by default, so `documents/rnbx0223_193.p
 is expected at `../documents/rnbx0223_193.png`. Use `--images-root` if the image
 folder lives elsewhere.
 
-Default Qwen API settings:
+Default Qwen local Transformers settings:
 
 - model: `Qwen/Qwen2.5-VL-7B-Instruct`
-- provider: `huggingface`
-- API key env: `HUGGINGFACE_API_KEY` or `HF_TOKEN`
-- optional API base: `--api-base ...`
+- provider: `local_hf`
+- token env for model download: `HUGGINGFACE_API_KEY` or `HF_TOKEN`
+
+Local Qwen-VL dependencies:
+
+```powershell
+pip install torch accelerate qwen-vl-utils
+pip install git+https://github.com/huggingface/transformers
+```
 
 ## 1. Spatial OCR Graphs
 
@@ -26,13 +32,13 @@ Outputs:
 - `spdocvqa_docvqa/graphs/<image_id>/graph.json`
 - `spdocvqa_docvqa/graphs/build_summary.json`
 
-## 2. Semantic Graphs With Qwen-VL Hugging Face API
+## 2. Semantic Graphs With Local Qwen-VL Transformers
 
 ```powershell
 python spdocvqa_docvqa\build_semantic_graphs.py --resume
 ```
 
-This sends both OCR text and the page image to Qwen2.5-VL when the image file exists.
+This sends both OCR text and the page image to local Qwen2.5-VL when the image file exists.
 
 Outputs:
 
@@ -56,13 +62,13 @@ Outputs:
 - `spdocvqa_docvqa/byog_workspaces/<image_id>/`
 - `spdocvqa_docvqa/byog_workspaces/export_manifest.json`
 
-## 4. Inference With Qwen-VL Hugging Face API
+## 4. Inference With Local Qwen-VL Transformers
 
 ```powershell
 python spdocvqa_docvqa\infer_qwen_baseline.py --resume
 ```
 
-This sends the page image plus semantic/BYOG context to Qwen2.5-VL.
+This sends the page image plus semantic/BYOG context to local Qwen2.5-VL.
 
 Outputs:
 
