@@ -28,9 +28,9 @@ DEFAULT_ENV_FILE = SCRIPT_DIR.parent / ".env"
 DEFAULT_IMAGES_ROOT = SCRIPT_DIR.parent / "ViTextVQA_images" / "st_images"
 DEFAULT_BYOG_ROOT = SCRIPT_DIR / "graphrag_baseline_per_image"
 DEFAULT_SEMANTIC_ROOT = SCRIPT_DIR / "semantic_graphs"
-DEFAULT_GRAPHRAG_BACKEND = "graphrag_api"
+DEFAULT_GRAPHRAG_BACKEND = "local_hf"
 DEFAULT_VLM_BACKEND = "local_qwen"
-DEFAULT_VLM_PROVIDER = "gemini"
+DEFAULT_VLM_PROVIDER = "openai"
 DEFAULT_VLM_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 DEFAULT_GRAPHRAG_COMPLETION_MODEL = DEFAULT_VLM_MODEL
 DEFAULT_GRAPHRAG_EMBEDDING_MODEL = "BAAI/bge-m3"
@@ -156,7 +156,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--api-key-env",
-        default="GEMINI_API_KEY",
+        default="LITELLM_API_KEY",
         help="Environment variable holding the API key when --vlm-backend=litellm_api.",
     )
     parser.add_argument(

@@ -1,0 +1,66 @@
+# SP-DocVQA Baseline Pipeline
+
+This folder is a self-contained SP-DocVQA baseline. It only uses images listed in
+`../test_v1.0.json` and maps each image path like `documents/rnbx0223_193.png` to
+`../spdocvqa_ocr/rnbx0223_193.json`.
+
+Default Qwen API settings:
+
+- model: `Qwen/Qwen2.5-VL-7B-Instruct`
+- provider: `huggingface`
+- API key env: `HUGGINGFACE_API_KEY` or `HF_TOKEN`
+- optional API base: `--api-base ...`
+
+## 1. Spatial OCR Graphs
+
+```powershell
+python spdocvqa_docvqa\build_graphs.py --resume
+```
+
+Outputs:
+
+- `spdocvqa_docvqa/graphs/<image_id>/graph.json`
+- `spdocvqa_docvqa/graphs/build_summary.json`
+
+## 2. Semantic Graphs With Qwen API
+
+```powershell
+python spdocvqa_docvqa\build_semantic_graphs.py --resume
+```
+
+Outputs:
+
+- `spdocvqa_docvqa/semantic_graphs/<image_id>/graph.json`
+- `spdocvqa_docvqa/semantic_graphs/build_summary.json`
+
+Useful smoke test:
+
+```powershell
+python spdocvqa_docvqa\build_semantic_graphs.py --limit 5
+```
+
+## 3. BYOG Workspaces
+
+```powershell
+python spdocvqa_docvqa\export_byog.py --clean-workspace
+```
+
+Outputs:
+
+- `spdocvqa_docvqa/byog_workspaces/<image_id>/`
+- `spdocvqa_docvqa/byog_workspaces/export_manifest.json`
+
+## 4. Inference With Qwen API
+
+```powershell
+python spdocvqa_docvqa\infer_qwen_baseline.py --resume
+```
+
+Outputs:
+
+- `spdocvqa_docvqa/qwen_predictions/docvqa_qwen_predictions.jsonl`
+- `spdocvqa_docvqa/qwen_predictions/docvqa_qwen_submission.json`
+- `spdocvqa_docvqa/qwen_predictions/docvqa_qwen_summary.json`
+
+The older `infer_docvqa.py` file is a deterministic OCR-only fallback baseline.
+The Qwen baseline entrypoint is `infer_qwen_baseline.py`.

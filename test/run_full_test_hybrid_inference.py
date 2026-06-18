@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--api-key-env",
-        default="GEMINI_API_KEY",
+        default="LITELLM_API_KEY",
         help="Environment variable holding the API key when --vlm-backend=litellm_api.",
     )
     parser.add_argument(
